@@ -5,7 +5,7 @@ import logging
 import json
 import traceback
 import uuid
-from typing import Any, Callable, Dict, AsyncIterator, Protocol
+from typing import Any, Dict, AsyncIterator, Protocol
 
 from fastapi.responses import StreamingResponse
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
@@ -66,7 +66,6 @@ async def stream_text_openai(
     adapter: BaseAdapter,
     new_message: ChatCompletionMessageParam,
     task_run: TaskRun | None = None,
-    tools: Dict[str, Callable[..., Any]] | None = None,
 ) -> AsyncIterator[str]:
     """Yield Server-Sent Events for a streaming chat completion using the OpenAI protocol.
 
@@ -244,7 +243,10 @@ async def stream_text_openai(
                     if text_started and not text_finished:
                         yield format_sse({"type": "text-end", "id": text_stream_id})
                         text_finished = True
-                    tool_map = tools if tools is not None else {}
+                    # invoke_openai_stream runs toolcalls internally — we can surface the
+                    # inputs (which are in the raw delta stream) but not the outputs (they
+                    # are handled inside the Kiln adapter and never surfaced to us); use 
+                    # the AI SDK transport to get the toolcall outputs
                     for index in sorted(tool_calls_state.keys()):
                         state = tool_calls_state[index]
                         tool_call_id = state.get("id")
@@ -284,34 +286,8 @@ async def stream_text_openai(
                                 "input": parsed_arguments,
                             }
                         )
-                        tool_function = tool_map.get(tool_name)
-                        if tool_function is None:
-                            yield format_sse(
-                                {
-                                    "type": "tool-output-error",
-                                    "toolCallId": tool_call_id,
-                                    "errorText": f"Tool '{tool_name}' not found.",
-                                }
-                            )
-                            continue
-                        try:
-                            tool_result = tool_function(**parsed_arguments)
-                        except Exception as error:
-                            yield format_sse(
-                                {
-                                    "type": "tool-output-error",
-                                    "toolCallId": tool_call_id,
-                                    "errorText": str(error),
-                                }
-                            )
-                        else:
-                            yield format_sse(
-                                {
-                                    "type": "tool-output-available",
-                                    "toolCallId": tool_call_id,
-                                    "output": tool_result,
-                                }
-                            )
+                        # toolcall output is not available here — the adapter runs it
+                        # internally so we don't get a streaming event via OpenAI Chat protocol
                     yield format_sse({"type": "finish-step"})
                     tool_calls_state.clear()
                     # Reset per-step state so the next step gets fresh IDs and clean flags
@@ -333,80 +309,6 @@ async def stream_text_openai(
 
         if finish_reason == "stop" and step_started:
             yield format_sse({"type": "finish-step"})
-
-        if finish_reason == "tool_calls":
-            for index in sorted(tool_calls_state.keys()):
-                state = tool_calls_state[index]
-                tool_call_id = state.get("id")
-                tool_name = state.get("name")
-
-                if tool_call_id is None or tool_name is None:
-                    continue
-
-                if not state["started"]:
-                    yield format_sse(
-                        {
-                            "type": "tool-input-start",
-                            "toolCallId": tool_call_id,
-                            "toolName": tool_name,
-                        }
-                    )
-                    state["started"] = True
-
-                raw_arguments = state["arguments"]
-                try:
-                    parsed_arguments = json.loads(raw_arguments) if raw_arguments else {}
-                except Exception as error:
-                    yield format_sse(
-                        {
-                            "type": "tool-input-error",
-                            "toolCallId": tool_call_id,
-                            "toolName": tool_name,
-                            "input": raw_arguments,
-                            "errorText": str(error),
-                        }
-                    )
-                    continue
-
-                yield format_sse(
-                    {
-                        "type": "tool-input-available",
-                        "toolCallId": tool_call_id,
-                        "toolName": tool_name,
-                        "input": parsed_arguments,
-                    }
-                )
-
-                # NOTE: not supported in OpenAI protocol (need AI SDK protocol coming out of Kiln adapter for this)
-                tool_function = {}.get(tool_name)
-                if tool_function is None:
-                    yield format_sse(
-                        {
-                            "type": "tool-output-error",
-                            "toolCallId": tool_call_id,
-                            "errorText": f"Tool '{tool_name}' not found.",
-                        }
-                    )
-                    continue
-
-                try:
-                    tool_result = tool_function(**parsed_arguments)
-                except Exception as error:
-                    yield format_sse(
-                        {
-                            "type": "tool-output-error",
-                            "toolCallId": tool_call_id,
-                            "errorText": str(error),
-                        }
-                    )
-                else:
-                    yield format_sse(
-                        {
-                            "type": "tool-output-available",
-                            "toolCallId": tool_call_id,
-                            "output": tool_result,
-                        }
-                    )
 
         if text_started and not text_finished:
             yield format_sse({"type": "text-end", "id": text_stream_id})
