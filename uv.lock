@@ -55,7 +55,7 @@ requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
     { name = "idna", specifier = "==3.11" },
     { name = "jiter", specifier = "==0.11.1" },
-    { name = "kiln-ai", git = "https://github.com/Kiln-AI/Kiln.git?subdirectory=libs%2Fcore&rev=4d8e99fc0021fe27ed8ea5b89c7f01865b7fe045" },
+    { name = "kiln-ai", git = "https://github.com/Kiln-AI/Kiln.git?subdirectory=libs%2Fcore&rev=eb537edf6ffeabb5ca7d3dd13dde9b1452e92715" },
     { name = "openai", specifier = ">=2.26.0" },
     { name = "pydantic", specifier = "==2.12.3" },
     { name = "pydantic-core", specifier = "==2.41.4" },
@@ -1285,7 +1285,7 @@ wheels = [
 [[package]]
 name = "kiln-ai"
 version = "0.25.0"
-source = { git = "https://github.com/Kiln-AI/Kiln.git?subdirectory=libs%2Fcore&rev=4d8e99fc0021fe27ed8ea5b89c7f01865b7fe045#4d8e99fc0021fe27ed8ea5b89c7f01865b7fe045" }
+source = { git = "https://github.com/Kiln-AI/Kiln.git?subdirectory=libs%2Fcore&rev=eb537edf6ffeabb5ca7d3dd13dde9b1452e92715#eb537edf6ffeabb5ca7d3dd13dde9b1452e92715" }
 dependencies = [
     { name = "anyio" },
     { name = "boto3" },

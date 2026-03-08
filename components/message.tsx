@@ -50,7 +50,7 @@ export const PreviewMessage = ({
               const partKey =
                 part.type?.startsWith("tool-")
                   ? part.toolCallId
-                  : part.id ?? `${part.type ?? "part"}-${index}`;
+                  : `${part.id ?? part.type ?? "part"}-${index}`;
 
               if (part.type === "text") {
                 return (
