@@ -36,4 +36,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-kiln-ai = { git = "https://github.com/Kiln-AI/Kiln.git", subdirectory = "libs/core", rev = "eb537edf6ffeabb5ca7d3dd13dde9b1452e92715" }
+kiln-ai = { git = "https://github.com/Kiln-AI/Kiln.git", subdirectory = "libs/core", rev = "66b31511f2457f26c65f29f243d366542b57e511" }
