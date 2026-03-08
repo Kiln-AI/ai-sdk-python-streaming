@@ -1,24 +1,82 @@
+from kiln_ai.datamodel import TaskRun
+from enum import Enum
+from kiln_ai.adapters.model_adapters.base_adapter import BaseAdapter
+import logging
 import json
 import traceback
 import uuid
-from typing import Any, Callable, Dict, Mapping, Sequence
+from typing import Any, Dict, AsyncIterator, Protocol
 
 from fastapi.responses import StreamingResponse
-from openai import OpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 
+from api.utils.storage import fake_storage
 
-def stream_text(
-    client: OpenAI,
-    messages: Sequence[ChatCompletionMessageParam],
-    tool_definitions: Sequence[Dict[str, Any]],
-    available_tools: Mapping[str, Callable[..., Any]],
-    protocol: str = "data",
-):
-    """Yield Server-Sent Events for a streaming chat completion."""
+logger = logging.getLogger(__name__)
+
+class StreamTransportProtocol(str, Enum):
+    """SSE protocol version."""
+    OPENAI = "openai"
+    AI_SDK = "ai-sdk"
+
+class StreamTransportFunc(Protocol):
+    def __call__(
+        self,
+        adapter: BaseAdapter,
+        new_message: ChatCompletionMessageParam,
+        task_run: TaskRun | None = None,
+    ) -> AsyncIterator[str]:
+        ...
+
+async def stream_text_ai_sdk_transport(
+    adapter: BaseAdapter,
+    new_message: ChatCompletionMessageParam,
+    task_run: TaskRun | None = None,
+) -> AsyncIterator[str]:
+    """Yield Server-Sent Events for a streaming chat completion using the AI SDK transport.
+    """
     try:
         def format_sse(payload: dict) -> str:
-            return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            return f"data: {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}\n\n"
+
+        # Extract user input from last message for the adapter
+        new_message_content = new_message.get("content", "") if new_message.get("content") else ""
+        if not isinstance(new_message_content, str):
+            raise ValueError(f"New message content must be a string, got {type(new_message_content)}")
+
+        stream = adapter.invoke_ai_sdk_stream(
+            input=new_message_content,
+            prior_trace=task_run.trace if task_run else None,
+        )
+
+        # events coming out of the stream are already in AI SDK protocol and do not need conversion
+        # we get granular events for every toolcall (including full input and output)
+        async for chunk in stream:
+            yield format_sse(chunk.model_dump())
+
+        # after exhausting the stream, we get the full TaskRun object which contains the trace that
+        # we can pass in on the next invoke to continue the conversation
+        fake_storage.store_task_run(stream.task_run)
+    
+    except Exception:
+        traceback.print_exc()
+        raise
+
+async def stream_text_openai(
+    adapter: BaseAdapter,
+    new_message: ChatCompletionMessageParam,
+    task_run: TaskRun | None = None,
+) -> AsyncIterator[str]:
+    """Yield Server-Sent Events for a streaming chat completion using the OpenAI protocol.
+
+    The OpenAI protocol cannot be used to stream tool calls from the stream - only toolcall args
+    are supported.
+
+    Use the AI SDK transport to stream tool calls with better control (args, output, error, etc.)
+    """
+    try:
+        def format_sse(payload: dict) -> str:
+            return f"data: {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}\n\n"
 
         message_id = f"msg-{uuid.uuid4().hex}"
         text_stream_id = "text-1"
@@ -30,14 +88,17 @@ def stream_text(
 
         yield format_sse({"type": "start", "messageId": message_id})
 
-        stream = client.chat.completions.create(
-            messages=messages,
-            model="gpt-4o",
-            stream=True,
-            tools=tool_definitions,
+        # Extract user input from last message for the adapter
+        new_message_content = new_message.get("content", "") if new_message.get("content") else ""
+        if not isinstance(new_message_content, str):
+            raise ValueError(f"New message content must be a string, got {type(new_message_content)}")
+
+        stream = adapter.invoke_openai_stream(
+            input=new_message_content,
+            prior_trace=task_run.trace if task_run else None,
         )
 
-        for chunk in stream:
+        async for chunk in stream:
             for choice in chunk.choices:
                 if choice.finish_reason is not None:
                     finish_reason = choice.finish_reason
@@ -126,9 +187,6 @@ def stream_text(
                                         }
                                     )
 
-            if not chunk.choices and chunk.usage is not None:
-                usage_data = chunk.usage
-
         if finish_reason == "stop" and text_started and not text_finished:
             yield format_sse({"type": "text-end", "id": text_stream_id})
             text_finished = True
@@ -176,35 +234,36 @@ def stream_text(
                     }
                 )
 
-                tool_function = available_tools.get(tool_name)
-                if tool_function is None:
-                    yield format_sse(
-                        {
-                            "type": "tool-output-error",
-                            "toolCallId": tool_call_id,
-                            "errorText": f"Tool '{tool_name}' not found.",
-                        }
-                    )
-                    continue
+                # NOTE: not supported in OpenAI protocol (need AI SDK protocol coming out of Kiln adapter for this)
+                # tool_function = available_tools.get(tool_name)
+                # if tool_function is None:
+                #     yield format_sse(
+                #         {
+                #             "type": "tool-output-error",
+                #             "toolCallId": tool_call_id,
+                #             "errorText": f"Tool '{tool_name}' not found.",
+                #         }
+                #     )
+                #     continue
 
-                try:
-                    tool_result = tool_function(**parsed_arguments)
-                except Exception as error:
-                    yield format_sse(
-                        {
-                            "type": "tool-output-error",
-                            "toolCallId": tool_call_id,
-                            "errorText": str(error),
-                        }
-                    )
-                else:
-                    yield format_sse(
-                        {
-                            "type": "tool-output-available",
-                            "toolCallId": tool_call_id,
-                            "output": tool_result,
-                        }
-                    )
+                # try:
+                #     tool_result = tool_function(**parsed_arguments)
+                # except Exception as error:
+                #     yield format_sse(
+                #         {
+                #             "type": "tool-output-error",
+                #             "toolCallId": tool_call_id,
+                #             "errorText": str(error),
+                #         }
+                #     )
+                # else:
+                #     yield format_sse(
+                #         {
+                #             "type": "tool-output-available",
+                #             "toolCallId": tool_call_id,
+                #             "output": tool_result,
+                #         }
+                #     )
 
         if text_started and not text_finished:
             yield format_sse({"type": "text-end", "id": text_stream_id})
@@ -230,6 +289,10 @@ def stream_text(
             yield format_sse({"type": "finish"})
 
         yield "data: [DONE]\n\n"
+
+        # after exhausting the stream, we get the full TaskRun object which contains the trace that
+        # we can pass in on the next invoke to continue the conversation
+        fake_storage.store_task_run(stream.task_run)
     except Exception:
         traceback.print_exc()
         raise
@@ -250,3 +313,16 @@ def patch_response_with_headers(
         response.headers.setdefault("x-vercel-ai-protocol", protocol)
 
     return response
+
+
+
+def get_stream_transport_func(
+    protocol: StreamTransportProtocol,
+) -> StreamTransportFunc:
+    match protocol:
+        case StreamTransportProtocol.OPENAI:
+            return stream_text_openai
+        case StreamTransportProtocol.AI_SDK:
+            return stream_text_ai_sdk_transport
+        case _:
+            raise ValueError(f"Invalid protocol: {protocol}")

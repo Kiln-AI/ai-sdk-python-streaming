@@ -2,8 +2,8 @@ import json
 from enum import Enum
 from typing import Any, List, Optional
 
-from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 from pydantic import BaseModel, ConfigDict
+from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 
 from .attachment import ClientAttachment
 
@@ -178,3 +178,6 @@ def convert_to_openai_messages(messages: List[ClientMessage]) -> List[ChatComple
         openai_messages.extend(tool_result_messages)
 
     return openai_messages
+
+def convert_to_openai_message(message: ClientMessage) -> ChatCompletionMessageParam:
+    return convert_to_openai_messages([message])[0]

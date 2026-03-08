@@ -9,6 +9,15 @@ import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
 import { Weather } from "./weather";
 
+const blockStyles =
+  "rounded-lg border border-border bg-muted/50 p-3 text-sm";
+
+function formatToolName(name: string): string {
+  return name
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export const PreviewMessage = ({
   message,
 }: {
@@ -34,53 +43,114 @@ export const PreviewMessage = ({
           </div>
         )}
 
-        <div className="flex flex-col gap-2 w-full">
+        <div className="flex flex-col gap-3 w-full">
           {message.parts &&
             message.parts.map((part: any, index: number) => {
+              // Stable key per segment so multiple text/reasoning blocks don't get merged (e.g. text before tools vs after tools)
+              const partKey =
+                part.type?.startsWith("tool-")
+                  ? part.toolCallId
+                  : part.id ?? `${part.type ?? "part"}-${index}`;
+
               if (part.type === "text") {
                 return (
-                  <div key={index} className="flex flex-col gap-4">
+                  <div key={partKey} className="flex flex-col gap-4">
                     <Streamdown>{part.text}</Streamdown>
                   </div>
                 );
               }
-              // Handle tool calls - type is "tool-{toolName}" in AI SDK v5
+              if (part.type === "reasoning" && part.text) {
+                return (
+                  <div
+                    key={partKey}
+                    className={cn(blockStyles, "text-muted-foreground")}
+                  >
+                    <div className="font-medium text-muted-foreground/80 mb-2">
+                      Reasoning
+                    </div>
+                    <div className="whitespace-pre-wrap">
+                      <Streamdown>{part.text}</Streamdown>
+                    </div>
+                  </div>
+                );
+              }
               if (part.type?.startsWith("tool-")) {
-                const { toolCallId, state, output } = part;
+                const { toolCallId, state, output, input } = part;
                 const toolName = part.type.replace("tool-", "");
+                const displayName = formatToolName(toolName);
+                const args = input ?? part.args;
+                const hasOutput = state === "output-available" && output != null;
+                const hasOutputError =
+                  state === "output-error" && part.errorText;
+                const isWeather = toolName === "get_current_weather";
 
-                if (state === "output-available" && output) {
-                  return (
-                    <div key={toolCallId}>
-                      {toolName === "get_current_weather" ? (
-                        <Weather weatherAtLocation={output} />
-                      ) : (
-                        <pre>{JSON.stringify(output, null, 2)}</pre>
-                      )}
+                return (
+                  <div
+                    key={partKey}
+                    className={cn(blockStyles, {
+                      "border-destructive/50 bg-destructive/5":
+                        hasOutputError,
+                    })}
+                  >
+                    <div className="font-medium text-muted-foreground/80 mb-2">
+                      Tool: {displayName}
                     </div>
-                  );
-                }
-                // Show loading state while tool is executing
-                if (
-                  state === "input-streaming" ||
-                  state === "input-available"
-                ) {
-                  return (
-                    <div
-                      key={toolCallId}
-                      className={cn({
-                        skeleton: ["get_current_weather"].includes(toolName),
-                      })}
-                    >
-                      {toolName === "get_current_weather" ? <Weather /> : null}
+                    <div className="flex flex-col gap-3">
+                      <div>
+                        <span className="text-muted-foreground/80 font-medium text-xs uppercase tracking-wide">
+                          Input
+                        </span>
+                        <div className="mt-1">
+                          {args != null &&
+                          (typeof args === "string"
+                            ? args.length > 0
+                            : Object.keys(args).length > 0) ? (
+                            <pre className="overflow-x-auto text-xs">
+                              {typeof args === "string"
+                                ? args
+                                : JSON.stringify(args, null, 2)}
+                            </pre>
+                          ) : (
+                            <span className="text-muted-foreground italic text-xs">
+                              Calling…
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground/80 font-medium text-xs uppercase tracking-wide">
+                          Output
+                        </span>
+                        <div className="mt-1">
+                          {hasOutputError ? (
+                            <div className="text-destructive text-xs">
+                              {part.errorText}
+                            </div>
+                          ) : hasOutput ? (
+                            isWeather ? (
+                              <Weather weatherAtLocation={output} />
+                            ) : (
+                              <pre className="overflow-x-auto text-xs">
+                                {JSON.stringify(output, null, 2)}
+                              </pre>
+                            )
+                          ) : isWeather && (state === "input-streaming" || state === "input-available") ? (
+                            <Weather />
+                          ) : (
+                            <span className="text-muted-foreground italic text-xs">
+                              …
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  );
-                }
+                  </div>
+                );
               }
               if (part.type === "file") {
                 return (
                   <PreviewAttachment
-                    key={index}
+                    key={partKey}
                     attachment={part}
                   />
                 );
