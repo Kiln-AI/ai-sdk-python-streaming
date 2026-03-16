@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastapi import FastAPI, Query, Request as FastAPIRequest
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from vercel.headers import set_headers
 
@@ -31,6 +32,13 @@ logger = logging.getLogger(__name__)
 
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,  # type: ignore[arg-type]
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
@@ -60,6 +68,7 @@ def task_adapter_factory(task_path: str | Path) -> BaseAdapter:
             "kiln_tool::multiply_numbers",
             "kiln_tool::divide_numbers",
         ]),
+        thinking_level="medium",
     ))
 
     return adapter
